@@ -1,0 +1,122 @@
+- hosts: NDO
+  gather_facts: no
+
+  vars:
+    mso_vars: &mso_vars
+      host: "{{ansible_host}}"
+      username: "{{ansible_user}}"
+      password: "{{ansible_ssh_pass}}"
+      validate_certs: no
+    deployment_immediacy: immediate #lazy
+    state: present
+
+  tasks:
+  - read_csv:
+      path: aci_build_mso_epg_static_binding.csv
+      delimiter: ;
+    register: bindings
+  
+  - set_fact:
+      templates_in_sheet: "{{ bindings.list |map(attribute='epg_template_name')|list|unique }}" 
+
+  - name: Query all site EPG static ports
+    cisco.mso.mso_schema_site_anp_epg_staticport:
+      <<: *mso_vars
+      schema: "{{(full_epgs | split('/') | list )[3]}}"
+      site: "{{(full_epgs | split('/') | list )[5]}}"
+      pod: "{{(full_epgs | split('/') | list )[6]}}"
+      template: "{{(full_epgs | split('/') | list )[4]}}"
+      anp:  "{{(full_epgs | split('/') | list )[1]}}"
+      epg: "{{(full_epgs | split('/') | list )[0]}}"
+      state: query
+    delegate_to: localhost
+    register: query_result
+    loop: "{{ bindings.list |map(attribute='full_epg')|list|unique }}"
+    loop_control:
+      loop_var: full_epgs
+
+  - name: Add a new static port to a site EPG
+    cisco.mso.mso_schema_site_anp_epg_staticport:
+      <<: *mso_vars
+      schema: "{{ port.epg_schema_name }}"
+      site: "{{ port.site_name }}"
+      pod: "pod-{{ port.pod_id }}"
+      template: "{{ port.epg_template_name }}"
+      anp: "{{ port.app_profile_name }}"
+      epg: "{{ port.epg_name }}"
+      type: port
+      leaf: "{{ port.left_node_id }}"
+      path: "{{ port.leaf_port }}"
+      vlan: "{{ port.port_encap_vlan }}"
+      mode: "{{ port.mode }}"
+      deployment_immediacy: "{{ deployment_immediacy }}"
+      state: "{{ state }}"
+    when: port.type == "port" and port.status != "ignored"      #optimizar
+    delegate_to: localhost
+    loop: "{{ bindings.list }}"
+    loop_control:
+      loop_var: port
+
+  - name: Add a new static VPC to a site EPG
+    cisco.mso.mso_schema_site_anp_epg_staticport:
+      <<: *mso_vars
+      schema: "{{ port.epg_schema_name }}"
+      site: "{{ port.site_name }}"
+      pod: "pod-{{ port.pod_id }}"
+      template: "{{ port.epg_template_name }}"
+      anp: "{{ port.app_profile_name }}"
+      epg: "{{ port.epg_name }}"
+      type: vpc
+      leaf: "{{ port.left_node_id }}-{{ port.right_node_id }}"
+      path: "{{ port.interface_policy_group }}"
+      vlan: "{{ port.port_encap_vlan }}"
+      mode: "{{ port.mode }}"
+      deployment_immediacy: "{{ deployment_immediacy }}"
+      state: "{{ state }}"
+    when: port.type == "vpc" and port.status != "ignored"     #optimizar
+    delegate_to: localhost
+    loop: "{{ bindings.list }}"
+    loop_control:
+      loop_var: port
+
+  - name: Schema Validate
+    cisco.mso.mso_schema_validate:
+      <<: *mso_vars
+      schema: "{{ schema }}"
+      state: query
+    delegate_to: localhost
+    register: validated_result
+    loop: "{{ bindings.list |map(attribute='epg_schema_name')|list|unique }}"
+    loop_control:
+      loop_var: schema
+
+  - name: Query status of objects in a template associated with a site
+    cisco.mso.mso_schema_template_deploy_status:
+      <<: *mso_vars
+      schema: "{{(schema_site | split('/') | list )[0]}}"
+      site: "{{(schema_site | split('/') | list )[1]}}"
+      state: query
+    delegate_to: localhost
+    register: query_result
+    loop: "{{ bindings.list |map(attribute='schema_site')|list|unique }}"
+    loop_control:
+      loop_var: schema_site
+
+  - name: Validated Result
+    ansible.builtin.debug:  
+      msg: "{{validated_result.results}}"
+  - name: Query template site association    
+    ansible.builtin.debug:
+      msg: "{{query_result.results}}"   
+
+  - name: Deploy a schema template
+    cisco.mso.mso_schema_template_deploy:
+      <<: *mso_vars
+      schema: "{{ (template.0.schema_site | split('/') | list )[0] }}"
+      template: "{{template.1.templateName}}"
+      state: deploy
+    delegate_to: localhost
+    when: template.1.anps[0] is defined and (template.1.anps[0].state == "modified" and validated_result.results[0].current.result == "true" and template.1.templateName in templates_in_sheet)  #Mejorar para mas de un schema
+    loop: "{{ query_result.results | subelements('current') }}"
+    loop_control:
+      loop_var: template
