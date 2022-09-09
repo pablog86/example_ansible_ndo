@@ -15,9 +15,15 @@
       path: aci_build_mso_epg_static_binding.csv
       delimiter: ;
     register: bindings
-  
+    tags:
+      - only-conf
+      - deploy
+
   - set_fact:
       templates_in_sheet: "{{ bindings.list |map(attribute='epg_template_name')|list|unique }}" 
+    tags:
+      - only-conf
+      - deploy
 
   - name: Query all site EPG static ports
     cisco.mso.mso_schema_site_anp_epg_staticport:
@@ -34,6 +40,9 @@
     loop: "{{ bindings.list |map(attribute='full_epg')|list|unique }}"
     loop_control:
       loop_var: full_epgs
+    tags:
+      - only-conf
+      - deploy
 
   - name: Add a new static port to a site EPG
     cisco.mso.mso_schema_site_anp_epg_staticport:
@@ -51,11 +60,14 @@
       mode: "{{ port.mode }}"
       deployment_immediacy: "{{ deployment_immediacy }}"
       state: "{{ state }}"
-    when: port.type == "port" and port.status != "ignored"      #optimizar
+    when: port.type == "port" and port.status != "ignored"     #optimizar
     delegate_to: localhost
     loop: "{{ bindings.list }}"
     loop_control:
       loop_var: port
+    tags:
+      - only-conf
+      - deploy
 
   - name: Add a new static VPC to a site EPG
     cisco.mso.mso_schema_site_anp_epg_staticport:
@@ -73,11 +85,14 @@
       mode: "{{ port.mode }}"
       deployment_immediacy: "{{ deployment_immediacy }}"
       state: "{{ state }}"
-    when: port.type == "vpc" and port.status != "ignored"     #optimizar
+    when: port.type == "vpc" and port.status != "ignored"    #optimizar
     delegate_to: localhost
     loop: "{{ bindings.list }}"
     loop_control:
       loop_var: port
+    tags:
+      - only-conf
+      - deploy
 
   - name: Schema Validate
     cisco.mso.mso_schema_validate:
@@ -89,6 +104,9 @@
     loop: "{{ bindings.list |map(attribute='epg_schema_name')|list|unique }}"
     loop_control:
       loop_var: schema
+    tags:
+      - only-conf
+      - deploy
 
   - name: Query status of objects in a template associated with a site
     cisco.mso.mso_schema_template_deploy_status:
@@ -101,6 +119,9 @@
     loop: "{{ bindings.list |map(attribute='schema_site')|list|unique }}"
     loop_control:
       loop_var: schema_site
+    tags:
+      - only-conf
+      - deploy
 
   - name: Validated Result
     ansible.builtin.debug:  
@@ -108,6 +129,9 @@
   - name: Query template site association    
     ansible.builtin.debug:
       msg: "{{query_result.results}}"   
+    tags:
+      - only-conf
+      - deploy
 
   - name: Deploy a schema template
     cisco.mso.mso_schema_template_deploy:
@@ -120,3 +144,5 @@
     loop: "{{ query_result.results | subelements('current') }}"
     loop_control:
       loop_var: template
+    tags: 
+      - deploy
